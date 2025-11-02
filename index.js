@@ -61,8 +61,7 @@ function validateVote(ballot, options) {
       return {
         valid: false,
         
-        error: `Invalid choice: "${choice}" is not one of the options.`,  // for production
-        // error: `Invalid choice: Your selection is not one of the options.`,  // for testing
+        error: `Invalid choice: "${choice}" is not one of the options.`,
       };
     }
   }
