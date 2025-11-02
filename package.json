@@ -1,6 +1,6 @@
 {
   "name": "@destinlmincy/rcv-core-logic",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "description": "A pure, lightweight, and dependency-free JavaScript library for calculating Ranked Choice Voting (RCV) elections.",
   "keywords": [
     "rcv",
