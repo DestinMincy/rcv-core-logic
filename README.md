@@ -2,6 +2,7 @@
 
 [![NPM Version](https://img.shields.io/npm/v/@destinlmincy/rcv-core-logic)]([https://www.npmjs.com/package/@destinlmincy/rcv-core-logic)
 [![License](https://img.shields.io/badge/License-Apache%202.0%20%2B%20Commons%20Clause-blue.svg)](https://github.com/DeatinMincy/rcv-core-logic/blob/main/LICENSE)
+![Completed]( https://img.shields.io/badge/Progress-Complete-green)
 
 A pure, lightweight, and dependency-free JavaScript library for calculating Ranked Choice Voting (RCV) elections.
 
