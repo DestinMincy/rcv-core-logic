@@ -1,8 +1,7 @@
 # rcv-core-logic
 
-[![NPM Version](https://img.shields.io/npm/v/rcv-core-logic)](https://www.npmjs.com/package/@destinlmincy/rcv-core-logic)
+[![NPM Version](https://img.shields.io/npm/v/@destinlmincy/rcv-core-logic)]([https://www.npmjs.com/package/@destinlmincy/rcv-core-logic)
 [![License](https://img.shields.io/badge/License-Apache%202.0%20%2B%20Commons%20Clause-blue.svg)](https://github.com/DeatinMincy/rcv-core-logic/blob/main/LICENSE)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/DestinMincy/rcv-core-logic/node.js.yml?branch=main)](https://github.com/DestinMincy/rcv-core-logic/actions)
 
 A pure, lightweight, and dependency-free JavaScript library for calculating Ranked Choice Voting (RCV) elections.
 
@@ -37,6 +36,8 @@ This library is designed to be the "mathematical engine" for a larger voting app
 npm install @destinlmincy/rcv-core-logic
 
 ```
+
+---
 
 ## API Reference
 
@@ -90,7 +91,7 @@ Cleans and formats a "messy" array of vote objects (e.g., from a database) into 
 - `rawVotes` (Array<object>): An array of vote objects. Each object must have a rankings property that is an array of strings.
 
 - `candidates` (Array<string>): The official list of all valid candidates.
-
+-
 **Returns:** (Array<Array<string>>): A clean array of only the valid ballots.
 
 **Example:**
@@ -198,6 +199,7 @@ console.log(JSON.stringify(results, null, 2));
 }
 
 ```
+
 ---
 
 ## Running Tests
@@ -206,6 +208,8 @@ console.log(JSON.stringify(results, null, 2));
 npm test
 
 ```
+
+---
 
 ## Copyright
 Copyright (c) 2025 Destin L. Mincy. All Rights Reserved.
