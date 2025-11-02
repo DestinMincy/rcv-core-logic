@@ -6,6 +6,8 @@
  * You can also add "test": "node test.js" to the "scripts" section of your package.json and run npm test
  */
 
+/* IMPORTANT! Lines 64 and 65 in index.js need to be adjusted for the unknown candidate test to not fail due to the variable */
+
 // Import the functions to be tested
 // The './' is important – it tells Node to look for a local file.
 const { validateVote, formatBallots, tally } = require('./index.js');
