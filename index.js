@@ -3,7 +3,7 @@
  * @copyright 2025 Destin L. Mincy. All Rights Reserved.
  * @license Apache 2.0 + Commons Clause
  * @author Destin L. Mincy 
- * @version 0.0.0
+ * @version 1.0.0
  */
 
 // -----------------------------------------------------------------------------
