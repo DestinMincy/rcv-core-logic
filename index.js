@@ -60,9 +60,9 @@ function validateVote(ballot, options) {
     if (!optionset.has(choice)) {
       return {
         valid: false,
-        error: `Invalid choice: "${choice}" is not one of the options.`,
-        // uncomment this to run the test or it will cause the test to fail the unknown candidate test due to lack of access to the variable 'choice'
-        // error: `Invalid choice: Your selection is not one of the options.`,
+        
+        error: `Invalid choice: "${choice}" is not one of the options.`,  // for production
+        // error: `Invalid choice: Your selection is not one of the options.`,  // for testing
       };
     }
   }
