@@ -2,8 +2,7 @@
  * @file This file contains the core logic for Ranked Choice Voting (RCV) and is intended to be a pure, dependency-free module.
  * @copyright 2025 Destin L. Mincy. All Rights Reserved.
  * @license Apache 2.0 + Commons Clause
- * @author Destin L. Mincy 
- * @version 1.0.1
+ * @author Destin L. Mincy
  */
 
 // -----------------------------------------------------------------------------
