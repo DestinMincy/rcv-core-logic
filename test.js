@@ -81,6 +81,19 @@ test('should return valid for a partial ballot', () => {
   assertEqual(result, { valid: true, error: null }, 'Partial ballot failed');
 });
 
+test('should return invalid for a ballot containing a non-string choice', () => {
+  const ballot = ['A', 123, 'C']; // 123 is a number, not a string
+  const result = validateVote(ballot, TEST_CANDIDATES);
+  assertEqual(
+    result,
+    {
+      valid: false,
+      error: 'Invalid choice: ballot contains a non-string value.',
+    },
+    'Non-string choice check failed'
+  );
+});
+
 // ---------------------------------
 // 2. formatBallots() Tests
 // ---------------------------------

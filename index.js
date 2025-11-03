@@ -56,11 +56,11 @@ function validateVote(ballot, options) {
 
   const optionset = new Set(options);
   for (const choice of ballot) {
-    if (typeof choice !== "string") {                                                                       │
-      return {                                                                                              │
-        valid: false,                                                                                       │
-        error: `Invalid choice: ballot contains a non-string value.`,                                       │
-      };                                                                                                    │
+    if (typeof choice !== "string") {
+      return {                                                                                              
+        valid: false,                                                                                       
+        error: `Invalid choice: ballot contains a non-string value.`,                                       
+      };                                                                                                    
     }
     if (!optionset.has(choice)) {
       return {
