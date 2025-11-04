@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RCV Ballot",
+  "description": "A schema for a single Ranked Choice Voting ballot.",
+  "type": "object",
+  "properties": {
+    "rankings": {
+      "description": "An array of candidate names in order of preference.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "approvals": {
+      "description": "An array of candidate names that the voter approves of.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "rankings"
+  ]
+}

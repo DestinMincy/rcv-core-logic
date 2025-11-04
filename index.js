@@ -47,22 +47,30 @@ function getTransferChoice(ballot, activeOptions) {
  * @returns {{valid: boolean, error: string|null}} - An object indicating validity.
  */
 function validateVote(ballot, options) {
-  if (!ballot || !Array.isArray(ballot)) {
-    return { valid: false, error: "Ballot is null or not an array." };
-  }
-  if (!options || !Array.isArray(options)) {
-    return { valid: false, error: "options list is null or not an array." };
+  if (!ballot || typeof ballot !== 'object' || ballot === null) {
+    return { valid: false, error: 'Ballot is not a valid object.' };
   }
 
-  const optionset = new Set(options);
-  for (const choice of ballot) {
-    if (typeof choice !== "string") {
-      return {                                                                                              
-        valid: false,                                                                                       
-        error: `Invalid choice: ballot contains a non-string value.`,                                       
-      };                                                                                                    
+  const { rankings, approvals } = ballot;
+
+  if (!rankings || !Array.isArray(rankings)) {
+    return { valid: false, error: 'Ballot rankings are null or not an array.' };
+  }
+  if (!options || !Array.isArray(options)) {
+    return { valid: false, error: 'Options list is null or not an array.' };
+  }
+
+  const optionSet = new Set(options);
+
+  // Validate rankings
+  for (const choice of rankings) {
+    if (typeof choice !== 'string') {
+      return {
+        valid: false,
+        error: 'Invalid choice: rankings contain a non-string value.',
+      };
     }
-    if (!optionset.has(choice)) {
+    if (!optionSet.has(choice)) {
       return {
         valid: false,
         error: `Invalid choice: "${choice}" is not one of the options.`,
@@ -70,12 +78,43 @@ function validateVote(ballot, options) {
     }
   }
 
-  const ballotSet = new Set(ballot);
-  if (ballotSet.size !== ballot.length) {
+  const rankingSet = new Set(rankings);
+  if (rankingSet.size !== rankings.length) {
     return {
       valid: false,
-      error: "Duplicate found: ballot contains repeated option rankings.",
+      error: 'Duplicate found: rankings contain repeated options.',
     };
+  }
+
+  // Validate approvals, if they exist
+  if (approvals) {
+    if (!Array.isArray(approvals)) {
+      return {
+        valid: false,
+        error: 'Approvals must be an array.',
+      };
+    }
+    for (const approved of approvals) {
+      if (typeof approved !== 'string') {
+        return {
+          valid: false,
+          error: 'Invalid choice: approvals contain a non-string value.',
+        };
+      }
+      if (!optionSet.has(approved)) {
+        return {
+          valid: false,
+          error: `Invalid approved choice: "${approved}" is not one of the options.`,
+        };
+      }
+    }
+    const approvalSet = new Set(approvals);
+    if (approvalSet.size !== approvals.length) {
+      return {
+        valid: false,
+        error: 'Duplicate found: approvals contain repeated options.',
+      };
+    }
   }
 
   return { valid: true, error: null };
@@ -95,15 +134,14 @@ function formatBallots(rawVotes, options) {
   }
 
   for (const vote of rawVotes) {
-    if (!vote || typeof vote !== "object" || !Array.isArray(vote.rankings)) {
+    if (!vote || typeof vote !== "object" || !vote.rankings) {
       continue;
     }
 
-    const ballot = vote.rankings;
-    const validation = validateVote(ballot, options);
+    const validation = validateVote(vote, options);
 
     if (validation.valid) {
-      cleanBallots.push(ballot);
+      cleanBallots.push({ rankings: vote.rankings, approvals: vote.approvals || [] });
     } else {
       console.warn(`Invalid ballot skipped: ${validation.error}`);
     }
@@ -113,9 +151,40 @@ function formatBallots(rawVotes, options) {
 }
 
 /**
+ * Calculates approval ratings for all candidates.
+ * @param {object[]} ballots - A clean array of ballots.
+ * @param {string[]} options - The official list of all valid options.
+ * @returns {object} An object containing raw approval counts and approval percentages.
+ */
+function calculateApproval(ballots, options) {
+  const totalVotes = ballots.length;
+  const approvalCounts = new Map();
+  const approvalPercentages = new Map();
+
+  options.forEach(option => approvalCounts.set(option, 0));
+
+  ballots.forEach(ballot => {
+    if (ballot.approvals) {
+      ballot.approvals.forEach(approvedOption => {
+        if (approvalCounts.has(approvedOption)) {
+          approvalCounts.set(approvedOption, approvalCounts.get(approvedOption) + 1);
+        }
+      });
+    }
+  });
+
+  options.forEach(option => {
+    const count = approvalCounts.get(option);
+    approvalPercentages.set(option, (count / totalVotes) * 100);
+  });
+
+  return { counts: approvalCounts, percentages: approvalPercentages };
+}
+
+/**
  * Runs the full round-by-round RCV simulation.
  *
- * @param {string[][]} ballots - A *clean* array of ballots, as returned by `formatBallots()`.
+ * @param {object[]} ballots - A *clean* array of ballots, as returned by `formatBallots()`.
  * @param {string[]} options - The official list of all valid options.
  * @param {object} config - An object specifying the rules for the election.
  * @param {string} config.tieBreaking - How to handle ties for elimination (e.g., 'eliminate_all').
@@ -127,9 +196,11 @@ function tally(ballots, options, config) {
   const threshold = Math.floor(totalVotes / 2) + 1;
   const roundLogs = [];
 
+  const { counts: initialApprovalCounts, percentages: initialApprovalPercentages } = calculateApproval(ballots, options);
+
   let activeOptions = new Set(options);
   let currentBallotChoices = ballots.map((ballot) =>
-    getActiveChoice(ballot, activeOptions)
+    getActiveChoice(ballot.rankings, activeOptions)
   );
 
   for (let round = 1; round <= config.maxRounds; round++) {
@@ -140,7 +211,16 @@ function tally(ballots, options, config) {
       status: "",
       eliminated: [],
       transfers: {},
+      approvalRatings: {},
+      approvalPercentages: {},
     };
+
+    initialApprovalCounts.forEach((count, option) => {
+      roundLog.approvalRatings[option] = count;
+    });
+    initialApprovalPercentages.forEach((percentage, option) => {
+      roundLog.approvalPercentages[option] = percentage;
+    });
 
     for (const option of activeOptions) {
       roundTally.set(option, 0);
@@ -177,10 +257,31 @@ function tally(ballots, options, config) {
       }
     }
 
-    const toEliminate = [];
+    let toEliminate = [];
     for (const [option, count] of roundTally.entries()) {
       if (count === minVotes) {
         toEliminate.push(option);
+      }
+    }
+
+    if (toEliminate.length > 1 && config.tieBreaking === 'approval') {
+      let minApprovalPercentage = Infinity;
+      toEliminate.forEach(option => {
+        const percentage = initialApprovalPercentages.get(option);
+        if (percentage < minApprovalPercentage) {
+          minApprovalPercentage = percentage;
+        }
+      });
+
+      const newToEliminate = [];
+      toEliminate.forEach(option => {
+        if (initialApprovalPercentages.get(option) === minApprovalPercentage) {
+          newToEliminate.push(option);
+        }
+      });
+
+      if (newToEliminate.length > 0 && newToEliminate.length < toEliminate.length) {
+        toEliminate = newToEliminate;
       }
     }
 
@@ -207,7 +308,7 @@ function tally(ballots, options, config) {
 
     const newBallotChoices = [];
     for (let i = 0; i < ballots.length; i++) {
-      const originalBallot = ballots[i];
+      const originalBallot = ballots[i].rankings;
       const currentChoice = currentBallotChoices[i];
 
       if (currentChoice && eliminatedSet.has(currentChoice)) {
@@ -252,4 +353,5 @@ module.exports = {
   validateVote,
   formatBallots,
   tally,
+  calculateApproval,
 };
