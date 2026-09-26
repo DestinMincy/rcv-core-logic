@@ -57,10 +57,10 @@ function validateVote(ballot, options) {
   const optionset = new Set(options);
   for (const choice of ballot) {
     if (typeof choice !== "string") {
-      return {                                                                                              
-        valid: false,                                                                                       
-        error: `Invalid choice: ballot contains a non-string value.`,                                       
-      };                                                                                                    
+      return {
+        valid: false,
+        error: `Invalid choice: ballot contains a non-string value.`,
+      };
     }
     if (!optionset.has(choice)) {
       return {
@@ -117,12 +117,14 @@ function formatBallots(rawVotes, options) {
  *
  * @param {string[][]} ballots - A *clean* array of ballots, as returned by `formatBallots()`.
  * @param {string[]} options - The official list of all valid options.
- * @param {object} config - An object specifying the rules for the election.
- * @param {string} config.tieBreaking - How to handle ties for elimination (e.g., 'eliminate_all').
- * @param {number} config.maxRounds - A safety limit to prevent infinite loops (e.g., 20).
+ * @param {object} [config] - An object specifying the rules for the election.
+ * @param {string} [config.tieBreaking] - How to handle ties for elimination (e.g., 'eliminate_all').
+ * @param {number} [config.maxRounds] - A safety limit to prevent infinite loops. Defaults to `options.length`,
+ *   which is always enough since every round either finds a winner or eliminates at least one option.
  * @returns {object} - A detailed, round-by-round results object.
  */
-function tally(ballots, options, config) {
+function tally(ballots, options, config = {}) {
+  const maxRounds = config.maxRounds ?? options.length;
   const totalVotes = ballots.length;
   const threshold = Math.floor(totalVotes / 2) + 1;
   const roundLogs = [];
@@ -132,7 +134,7 @@ function tally(ballots, options, config) {
     getActiveChoice(ballot, activeOptions)
   );
 
-  for (let round = 1; round <= config.maxRounds; round++) {
+  for (let round = 1; round <= maxRounds; round++) {
     const roundTally = new Map();
     const roundLog = {
       round: round,
@@ -156,8 +158,11 @@ function tally(ballots, options, config) {
       roundLog.tally[option] = count;
     });
 
+    // A lone remaining option wins even if exhausted ballots keep it below the
+    // original threshold; otherwise it would be "eliminated" as a tie with itself.
+    const soleSurvivor = activeOptions.size === 1;
     for (const [option, count] of roundTally.entries()) {
-      if (count >= threshold) {
+      if (count >= threshold || (soleSurvivor && count > 0)) {
         roundLog.status = "Winner found";
         roundLogs.push(roundLog);
         return {
@@ -240,7 +245,7 @@ function tally(ballots, options, config) {
     threshold: threshold,
     options: options,
     rounds: roundLogs,
-    error: `Tally exceeded max rounds (${config.maxRounds}).`,
+    error: `Tally exceeded max rounds (${maxRounds}).`,
   };
 }
 

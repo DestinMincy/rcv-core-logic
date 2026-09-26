@@ -234,6 +234,37 @@ test('should handle exhausted ballots correctly', () => {
   );
 });
 
+test('should declare the last remaining option the winner when exhausted ballots block a majority', () => {
+  const ballots = [['A'], ['A'], ['B'], ['C'], ['D']];
+  const candidates = ['A', 'B', 'C', 'D'];
+  const results = tally(ballots, candidates, TEST_CONFIG);
+
+  // Round 1: {A: 2, B: 1, C: 1, D: 1}. B, C, D eliminated; their ballots exhaust.
+  // Round 2: {A: 2}. A is below the threshold of 3 but is the only option left.
+  assertEqual(results.winner, 'A', 'Sole remaining option was not declared winner');
+  assertEqual(results.rounds.length, 2, 'Sole survivor test round count incorrect');
+  assertEqual(results.rounds[1].status, 'Winner found', 'Sole survivor round status incorrect');
+  assertEqual(results.rounds[1].eliminated, [], 'Sole survivor should not be eliminated');
+});
+
+test('should not declare a winner when the only option has no votes', () => {
+  const results = tally([], ['A'], TEST_CONFIG);
+  assertEqual(results.winner, null, 'Zero-vote sole option should not win');
+});
+
+test('should default maxRounds when config is omitted', () => {
+  const ballots = [
+    ['A', 'B', 'C'],
+    ['B', 'A', 'C'],
+    ['A', 'C', 'B'],
+    ['C', 'B', 'A'],
+    ['B', 'A', 'C'],
+  ];
+  const results = tally(ballots, ['A', 'B', 'C']);
+  assertEqual(results.winner, 'B', 'Default config winner incorrect');
+  assertEqual(results.error, undefined, 'Default config should not hit max rounds');
+});
+
 // ---------------------------------
 // Final Summary
 // ---------------------------------
@@ -248,5 +279,6 @@ if (passCount === testCount) {
   console.log(`\x1b[32m  Passed:      ${passCount}\x1b[0m`); // Green
   console.log(`\x1b[31m  Failed:      ${testCount - passCount}\x1b[0m`); // Red
   console.log('\x1b[31m\n  Some tests failed.\x1b[0m');
+  process.exitCode = 1; // Fail `npm test` so CI does not publish a broken build
 }
 console.log('---------------------------------\n');

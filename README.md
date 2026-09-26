@@ -1,7 +1,7 @@
 # rcv-core-logic
 
-[![NPM Version](https://img.shields.io/npm/v/@destinlmincy/rcv-core-logic)]([https://www.npmjs.com/package/@destinlmincy/rcv-core-logic)
-[![License](https://img.shields.io/badge/License-Apache%202.0%20%2B%20Commons%20Clause-blue.svg)](https://github.com/DeatinMincy/rcv-core-logic/blob/main/LICENSE)
+[![NPM Version](https://img.shields.io/npm/v/@destinlmincy/rcv-core-logic)](https://www.npmjs.com/package/@destinlmincy/rcv-core-logic)
+[![License](https://img.shields.io/badge/License-Apache%202.0%20%2B%20Commons%20Clause-blue.svg)](https://github.com/DestinMincy/rcv-core-logic/blob/master/LICENSE)
 ![Completed]( https://img.shields.io/badge/Progress-Complete-green)
 
 A pure, lightweight, and dependency-free JavaScript library for calculating Ranked Choice Voting (RCV) elections.
@@ -63,7 +63,7 @@ Checks if a single ballot is valid. A valid ballot must not contain any duplicat
 
 ```JavaScript
 
-const { validateVote } = require('rcv-core-logic');
+const { validateVote } = require('@destinlmincy/rcv-core-logic');
 
 const candidates = ['A', 'B', 'C'];
 
@@ -75,12 +75,12 @@ console.log(validateVote(vote1, candidates));
 // Invalid: Contains a duplicate
 const vote2 = ['B', 'A', 'B'];
 console.log(validateVote(vote2, candidates));
-// Output: { valid: false, error: 'Duplicate candidates: A ballot cannot rank the same candidate more than once.' }
+// Output: { valid: false, error: 'Duplicate found: ballot contains repeated option rankings.' }
 
 // Invalid: Contains an unknown candidate
 const vote3 = ['D', 'A'];
 console.log(validateVote(vote3, candidates));
-// Output: { valid: false, error: 'Invalid candidate: "D" is not one of the options.' }
+// Output: { valid: false, error: 'Invalid choice: "D" is not one of the options.' }
 
 ```
 
@@ -92,14 +92,14 @@ Cleans and formats a "messy" array of vote objects (e.g., from a database) into 
 - `rawVotes` (Array<object>): An array of vote objects. Each object must have a rankings property that is an array of strings.
 
 - `candidates` (Array<string>): The official list of all valid candidates.
--
+
 **Returns:** (Array<Array<string>>): A clean array of only the valid ballots.
 
 **Example:**
 
 ```JavaScript
 
-const { formatBallots } = require('rcv-core-logic');
+const { formatBallots } = require('@destinlmincy/rcv-core-logic');
 
 const candidates = ['A', 'B', 'C'];
 const rawVotes = [
@@ -125,19 +125,22 @@ The main engine. This function takes a clean list of ballots and runs the full r
 
 - `candidates` (Array<string>): The official list of all valid candidates.
 
-- `config` (object): An object specifying the rules for the election.
+- `config` (object, optional): An object specifying the rules for the election.
 
   - `tieBreaking` (string): How to handle ties for elimination. (e.g., `'eliminate_all'`).
 
-  - `maxRounds` (number): A safety limit to prevent infinite loops (e.g., `20`).
+  - `maxRounds` (number): A safety limit to prevent infinite loops (e.g., `20`). Defaults to the number of candidates.
 
 **Returns:** (object): A detailed, round-by-round results object.
+
+- The winning threshold is a majority of all ballots cast (`floor(totalVotes / 2) + 1`). If exhausted ballots keep every option below it, elimination continues until one option remains, and that option wins.
+- `rounds[n].transfers` maps each eliminated option to where its ballots went, e.g. `{ "C": { "B": 1, "exhausted": 2 } }`.
 
 **Example:**
 
 ```JavaScript
 
-const { tally } = require('rcv-core-logic');
+const { tally } = require('@destinlmincy/rcv-core-logic');
 
 // Note: This would come from formatBallots()
 const ballots = [
@@ -168,7 +171,7 @@ console.log(JSON.stringify(results, null, 2));
   "winner": "B",
   "totalVotes": 5,
   "threshold": 3,
-  "candidates": ["A", "B", "C"],
+  "options": ["A", "B", "C"],
   "rounds": [
     {
       "round": 1,
@@ -181,8 +184,7 @@ console.log(JSON.stringify(results, null, 2));
       "eliminated": ["C"],
       "transfers": {
         "C": {
-          "target": "B",
-          "count": 1
+          "B": 1
         }
       }
     },
