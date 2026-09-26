@@ -153,7 +153,6 @@ test('should return an empty array for empty input', () => {
 // ---------------------------------
 console.log('\nRunning tests for tally()...');
 const TEST_CONFIG = {
-  tieBreaking: 'eliminate_all',
   maxRounds: 10,
 };
 
@@ -212,7 +211,7 @@ test('should find a winner in multiple rounds (elimination)', () => {
   );
 });
 
-test('should handle an unbreakable tie', () => {
+test('should stop on a tie that earlier rounds cannot break', () => {
   const ballots = [
     ['A', 'B'],
     ['B', 'A'],
@@ -222,7 +221,7 @@ test('should handle an unbreakable tie', () => {
   assertEqual(results.winner, null, 'Tie test did not result in null winner');
   assertEqual(
     results.rounds[results.rounds.length - 1].status,
-    'Unbreakable tie',
+    'Unresolved tie',
     'Tie test status incorrect'
   );
 });
@@ -254,22 +253,26 @@ test('should handle exhausted ballots correctly', () => {
   );
   assertEqual(
     results.rounds[1].status,
-    'Unbreakable tie',
+    'Unresolved tie',
     'Exhausted ballot test did not end in a tie'
   );
 });
 
-test('should declare the last remaining option the winner when exhausted ballots block a majority', () => {
+test('should declare a winner once exhausted ballots drop out of the threshold', () => {
   const ballots = [['A'], ['A'], ['B'], ['C'], ['D']];
   const candidates = ['A', 'B', 'C', 'D'];
-  const results = tally(ballots, candidates, TEST_CONFIG);
+  const results = tally(ballots, candidates, { tieBreakOrder: ['D', 'C', 'B', 'A'] });
 
-  // Round 1: {A: 2, B: 1, C: 1, D: 1}. B, C, D eliminated; their ballots exhaust.
-  // Round 2: {A: 2}. A is below the threshold of 3 but is the only option left.
-  assertEqual(results.winner, 'A', 'Sole remaining option was not declared winner');
-  assertEqual(results.rounds.length, 2, 'Sole survivor test round count incorrect');
-  assertEqual(results.rounds[1].status, 'Winner found', 'Sole survivor round status incorrect');
-  assertEqual(results.rounds[1].eliminated, [], 'Sole survivor should not be eliminated');
+  // Round 1: {A: 2, B: 1, C: 1, D: 1}, threshold 3. D loses the tie by lot and exhausts.
+  // Round 2: {A: 2, B: 1, C: 1}, threshold 3. C loses the tie by lot and exhausts.
+  // Round 3: {A: 2, B: 1}, 3 continuing, threshold 2. A wins, though short of 3 of all 5 ballots.
+  assertEqual(results.winner, 'A', 'Winner on continuing ballots not found');
+  assertEqual(results.rounds.length, 3, 'Round count incorrect');
+  assertEqual(
+    [results.rounds[2].threshold, results.rounds[2].exhausted],
+    [2, 2],
+    'Final round threshold/exhausted incorrect'
+  );
 });
 
 test('should not declare a winner when the only option has no votes', () => {
@@ -312,47 +315,66 @@ test('should measure the threshold against continuing ballots each round', () =>
   );
 });
 
-test('should break a last-place tie using the previous round when configured', () => {
+test('should break a last-place tie using the previous round', () => {
   const ballots = [
     ['A'], ['A'], ['A'],
     ['B', 'A'], ['B', 'C'],
     ['C'], ['C'], ['C'],
     ['D', 'B', 'A'],
   ];
-  const candidates = ['A', 'B', 'C', 'D'];
+  const results = tally(ballots, ['A', 'B', 'C', 'D'], TEST_CONFIG);
 
   // Round 1: {A: 3, B: 2, C: 3, D: 1}. D eliminated, transfers to B.
-  // Round 2: {A: 3, B: 3, C: 3}, a three-way tie.
-  const eliminateAll = tally(ballots, candidates, TEST_CONFIG);
-  assertEqual(eliminateAll.winner, null, 'eliminate_all should end in a tie');
-  assertEqual(eliminateAll.rounds[1].status, 'Unbreakable tie', 'eliminate_all status incorrect');
-
-  // previous_round: B had the fewest in round 1, so only B is eliminated.
+  // Round 2: {A: 3, B: 3, C: 3}. B had the fewest in round 1, so only B is eliminated.
   // Round 3: {A: 5, C: 4}. A wins.
-  const previousRound = tally(ballots, candidates, { tieBreaking: 'previous_round' });
-  assertEqual(previousRound.rounds[1].eliminated, ['B'], 'previous_round eliminated the wrong option');
-  assertEqual(previousRound.winner, 'A', 'previous_round winner incorrect');
-  assertEqual(previousRound.rounds[2].tally, { A: 5, C: 4 }, 'previous_round final tally incorrect');
+  assertEqual(results.rounds[1].eliminated, ['B'], 'Previous-round tie-break eliminated the wrong option');
+  assertEqual(results.rounds[1].tieBreak, 'previous_round', 'Tie-break method not recorded');
+  assertEqual(results.rounds[2].tally, { A: 5, C: 4 }, 'Final tally incorrect');
+  assertEqual(results.winner, 'A', 'Previous-round tie-break winner incorrect');
 });
 
-test('should eliminate all tied options when no previous round separates them', () => {
-  const ballots = [['A'], ['A'], ['A'], ['B'], ['C'], ['D']];
-  const results = tally(ballots, ['A', 'B', 'C', 'D'], { tieBreaking: 'previous_round' });
-  // Round 1: {A: 3, B: 1, C: 1, D: 1}, threshold 4. No earlier round exists,
-  // so B, C and D are eliminated together and their ballots exhaust.
-  // Round 2: A has 3 of 3 continuing ballots and wins.
-  assertEqual(results.rounds[0].eliminated, ['B', 'C', 'D'], 'Round-1 tie fallback incorrect');
-  assertEqual(results.winner, 'A', 'Round-1 tie fallback winner incorrect');
+test('should batch-eliminate options tied at zero votes', () => {
+  // Round 1: {A: 2, B: 2, C: 1, D: 0, E: 0}. D and E have no votes, so eliminating them
+  // together moves no ballots and is identical to eliminating them one at a time.
+  const results = tally([['A'], ['A'], ['B'], ['B'], ['C', 'A']], ['A', 'B', 'C', 'D', 'E'], TEST_CONFIG);
+  assertEqual(results.rounds[0].eliminated, ['D', 'E'], 'Zero-vote batch elimination incorrect');
+  assertEqual(results.rounds[0].tieBreak, 'batch', 'Batch tie-break not recorded');
+  assertEqual(results.winner, 'A', 'Zero-vote batch winner incorrect');
 });
 
-test('should reject an unknown tieBreaking rule', () => {
-  let threw = false;
+test('should not batch-eliminate tied options that hold votes', () => {
+  // Round 1: {A: 4, B: 3, C: 1, D: 1}. C and D cannot catch B, but eliminating them together
+  // would skip a round that a later previous-round tie-break could depend on.
+  const results = tally(
+    [['A'], ['A'], ['A'], ['A'], ['B'], ['B'], ['B'], ['C'], ['D']],
+    ['A', 'B', 'C', 'D'],
+    TEST_CONFIG
+  );
+  assertEqual(results.winner, null, 'Tie with votes should not be batch-eliminated');
+  assertEqual(results.rounds[0].status, 'Unresolved tie', 'Unresolved tie status incorrect');
+  assertEqual(results.rounds[0].eliminated, [], 'Unresolved tie should eliminate nothing');
+  assertEqual(
+    results.error,
+    'Tie for last place between C, D cannot be broken by earlier rounds. Pass config.tieBreakOrder to resolve it.',
+    'Unresolved tie error incorrect'
+  );
+});
+
+test('should use tieBreakOrder when earlier rounds cannot break a tie', () => {
+  const results = tally([['A', 'B'], ['B', 'A']], ['A', 'B'], { tieBreakOrder: ['B', 'A'] });
+  assertEqual(results.rounds[0].eliminated, ['B'], 'tieBreakOrder eliminated the wrong option');
+  assertEqual(results.rounds[0].tieBreak, 'tie_break_order', 'tieBreakOrder method not recorded');
+  assertEqual(results.winner, 'A', 'tieBreakOrder winner incorrect');
+});
+
+test('should reject a tieBreakOrder that does not list every option', () => {
+  let message = null;
   try {
-    tally([['A']], ['A', 'B'], { tieBreaking: 'coin_flip' });
+    tally([['A']], ['A', 'B'], { tieBreakOrder: ['A'] });
   } catch (error) {
-    threw = /Unknown tieBreaking rule "coin_flip"/.test(error.message);
+    message = error.message;
   }
-  assertEqual(threw, true, 'Unknown tieBreaking rule did not throw');
+  assertEqual(message, 'config.tieBreakOrder must be an array listing every option.', 'Incomplete tieBreakOrder did not throw');
 });
 
 // ---------------------------------

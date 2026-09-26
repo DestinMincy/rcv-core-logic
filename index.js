@@ -114,23 +114,44 @@ function formatBallots(rawVotes, options, onInvalid) {
   return cleanBallots;
 }
 
-const TIE_BREAKING_RULES = ["eliminate_all", "previous_round"];
-
 /**
- * Narrows a set of options tied for last place by looking back through earlier rounds,
- * most recent first, and keeping only those with the fewest votes in each.
+ * Decides which of the options tied for last place to eliminate.
+ *
+ * 1. If the tied options have no votes, eliminate them all at once. No ballots move, so this is
+ *    identical to eliminating them one at a time. (Batching options that do hold votes is not safe:
+ *    it skips intermediate rounds that a later previous-round tie-break may depend on.)
+ * 2. Otherwise, look back through earlier rounds, most recent first, keeping only the options
+ *    with the fewest votes in each, until one remains.
+ * 3. Otherwise, eliminate whichever remaining option comes first in `tieBreakOrder`.
+ *
  * @param {string[]} tied - Options tied for the fewest votes this round.
+ * @param {Map<string, number>} roundTally - This round's vote counts for every active option.
  * @param {object[]} previousRounds - Round logs for the rounds already completed.
- * @returns {string[]} - The options to eliminate; more than one if the tie never breaks.
+ * @param {string[]} [tieBreakOrder] - Every option, in the order they lose unresolved ties.
+ * @returns {{eliminate: string[], method: string}|{unresolved: string[]}} - The options to eliminate and
+ *   the rule that chose them, or the options still tied if no rule separates them.
  */
-function breakTieByPreviousRounds(tied, previousRounds) {
+function resolveTie(tied, roundTally, previousRounds, tieBreakOrder) {
+  if (roundTally.get(tied[0]) === 0) {
+    return { eliminate: tied, method: "batch" };
+  }
+
   let remaining = tied;
   for (let i = previousRounds.length - 1; i >= 0 && remaining.length > 1; i--) {
     const pastTally = previousRounds[i].tally;
     const fewest = Math.min(...remaining.map((option) => pastTally[option]));
     remaining = remaining.filter((option) => pastTally[option] === fewest);
   }
-  return remaining;
+  if (remaining.length === 1) {
+    return { eliminate: remaining, method: "previous_round" };
+  }
+
+  if (tieBreakOrder) {
+    const loser = tieBreakOrder.find((option) => remaining.includes(option));
+    return { eliminate: [loser], method: "tie_break_order" };
+  }
+
+  return { unresolved: remaining };
 }
 
 /**
@@ -141,20 +162,21 @@ function breakTieByPreviousRounds(tied, previousRounds) {
  * @param {string[][]} ballots - A *clean* array of ballots, as returned by `formatBallots()`.
  * @param {string[]} options - The official list of all valid options.
  * @param {object} [config] - An object specifying the rules for the election.
- * @param {string} [config.tieBreaking] - How to handle ties for last place. `'eliminate_all'` (default) eliminates
- *   every tied option at once. `'previous_round'` eliminates whichever tied option had the fewest votes in the most
- *   recent earlier round that separates them, and falls back to eliminating all of them if none does.
+ * @param {string[]} [config.tieBreakOrder] - Every option, ordered from first to last to lose a tie that
+ *   earlier rounds cannot separate (e.g. the result of drawing lots in advance). Without it, such a tie stops
+ *   the tally with status "Unresolved tie".
  * @param {number} [config.maxRounds] - A safety limit to prevent infinite loops. Defaults to `options.length`,
  *   which is always enough since every round either finds a winner or eliminates at least one option.
  * @returns {object} - A detailed, round-by-round results object.
  */
 function tally(ballots, options, config = {}) {
   const maxRounds = config.maxRounds ?? options.length;
-  const tieBreaking = config.tieBreaking ?? "eliminate_all";
-  if (!TIE_BREAKING_RULES.includes(tieBreaking)) {
-    throw new Error(
-      `Unknown tieBreaking rule "${tieBreaking}". Expected one of: ${TIE_BREAKING_RULES.join(", ")}.`
-    );
+  const tieBreakOrder = config.tieBreakOrder;
+  if (
+    tieBreakOrder !== undefined &&
+    (!Array.isArray(tieBreakOrder) || !options.every((option) => tieBreakOrder.includes(option)))
+  ) {
+    throw new Error("config.tieBreakOrder must be an array listing every option.");
   }
 
   const totalVotes = ballots.length;
@@ -184,6 +206,7 @@ function tally(ballots, options, config = {}) {
       tally: {},
       status: "",
       eliminated: [],
+      tieBreak: null,
       transfers: {},
     };
 
@@ -218,6 +241,12 @@ function tally(ballots, options, config = {}) {
       }
     }
 
+    if (continuingVotes === 0) {
+      roundLog.status = "No continuing ballots";
+      roundLogs.push(roundLog);
+      return result(null);
+    }
+
     let minVotes = Infinity;
     for (const count of roundTally.values()) {
       if (count < minVotes) {
@@ -232,15 +261,17 @@ function tally(ballots, options, config = {}) {
       }
     }
 
-    if (toEliminate.length > 1 && tieBreaking === "previous_round") {
-      toEliminate = breakTieByPreviousRounds(toEliminate, roundLogs);
-    }
-
-    if (toEliminate.length === activeOptions.size) {
-      roundLog.status = "Unbreakable tie";
-      roundLog.eliminated = toEliminate;
-      roundLogs.push(roundLog);
-      return result(null);
+    if (toEliminate.length > 1) {
+      const resolution = resolveTie(toEliminate, roundTally, roundLogs, tieBreakOrder);
+      if (resolution.unresolved) {
+        roundLog.status = "Unresolved tie";
+        roundLogs.push(roundLog);
+        return result(null, {
+          error: `Tie for last place between ${resolution.unresolved.join(", ")} cannot be broken by earlier rounds. Pass config.tieBreakOrder to resolve it.`,
+        });
+      }
+      toEliminate = resolution.eliminate;
+      roundLog.tieBreak = resolution.method;
     }
 
     roundLog.status = "Elimination";

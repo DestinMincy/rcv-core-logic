@@ -131,14 +131,18 @@ The main engine. This function takes a clean list of ballots and runs the full r
 
 - `config` (object, optional): An object specifying the rules for the election.
 
-  - `tieBreaking` (string): How to handle a tie for last place. Unknown values throw.
-    - `'eliminate_all'` (default): eliminate every tied option at once. Simple, but it can eliminate an option that would have won once the others' votes transferred.
-    - `'previous_round'`: eliminate whichever tied option had the fewest votes in the most recent earlier round that separates them. If no earlier round does (e.g. a tie in round 1), all tied options are eliminated.
+  - `tieBreakOrder` (Array<string>, optional): Every candidate, ordered from first to last to lose a tie that earlier rounds cannot break, e.g. the result of drawing lots before the count. Must list every candidate or `tally()` throws.
 
   - `maxRounds` (number): A safety limit to prevent infinite loops (e.g., `20`). Defaults to the number of candidates.
 
 **Returns:** (object): A detailed, round-by-round results object.
 
+- Ties for last place are resolved in this order, and each round's `tieBreak` field records which rule was used (`null` if there was no tie):
+  1. `"batch"`: every tied option has zero votes, so they are all eliminated at once. No ballots move, so this is identical to eliminating them one at a time.
+  2. `"previous_round"`: eliminate the tied option with the fewest votes in the most recent earlier round that separates them.
+  3. `"tie_break_order"`: eliminate whichever remaining tied option comes first in `config.tieBreakOrder`.
+
+  If none of these applies, the tally stops with `status: "Unresolved tie"`, `winner: null`, and an `error` naming the tied options. Resolve the tie (e.g. by lot) and run it again with `tieBreakOrder`. The tally also stops, with `status: "No continuing ballots"`, if every ballot is exhausted.
 - Each round, an option wins with a majority of the *continuing* ballots, i.e. those not yet exhausted (`floor(continuing / 2) + 1`). Each round reports its own `threshold` and `exhausted` count; the top-level `threshold` is the first round's.
 - `rounds[n].transfers` maps each eliminated option to where its ballots went, e.g. `{ "C": { "B": 1, "exhausted": 2 } }`.
 
@@ -159,7 +163,6 @@ const ballots = [
 
 const candidates = ['A', 'B', 'C'];
 const config = {
-  tieBreaking: 'eliminate_all',
   maxRounds: 20
 };
 
@@ -190,6 +193,7 @@ console.log(JSON.stringify(results, null, 2));
       },
       "status": "Elimination",
       "eliminated": ["C"],
+      "tieBreak": null,
       "transfers": {
         "C": {
           "B": 1
@@ -206,6 +210,7 @@ console.log(JSON.stringify(results, null, 2));
       },
       "status": "Winner found",
       "eliminated": [],
+      "tieBreak": null,
       "transfers": {}
     }
   ]
