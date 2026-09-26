@@ -35,6 +35,26 @@ function getTransferChoice(ballot, activeOptions) {
   return getActiveChoice(ballot, activeOptions);
 }
 
+/**
+ * Returns a uniformly random integer in [0, n) from a cryptographically secure source.
+ * Uses rejection sampling so no value is favored when 2^32 is not a multiple of n.
+ * @param {number} n - Exclusive upper bound, 1 <= n <= 2^32.
+ * @returns {number}
+ */
+function secureRandomInt(n) {
+  const cryptoSource =
+    globalThis.crypto ?? (typeof require === "function" ? require("crypto").webcrypto : undefined);
+  if (!cryptoSource || typeof cryptoSource.getRandomValues !== "function") {
+    throw new Error("No secure random source available; pass a randomInt function to drawTieBreakOrder().");
+  }
+  const limit = 2 ** 32 - (2 ** 32 % n);
+  const buffer = new Uint32Array(1);
+  do {
+    cryptoSource.getRandomValues(buffer);
+  } while (buffer[0] >= limit);
+  return buffer[0] % n;
+}
+
 // -----------------------------------------------------------------------------
 // Exported Functions
 // -----------------------------------------------------------------------------
@@ -57,10 +77,10 @@ function validateVote(ballot, options) {
   const optionset = new Set(options);
   for (const choice of ballot) {
     if (typeof choice !== "string") {
-      return {                                                                                              
-        valid: false,                                                                                       
-        error: `Invalid choice: ballot contains a non-string value.`,                                       
-      };                                                                                                    
+      return {
+        valid: false,
+        error: `Invalid choice: ballot contains a non-string value.`,
+      };
     }
     if (!optionset.has(choice)) {
       return {
@@ -86,9 +106,10 @@ function validateVote(ballot, options) {
  *
  * @param {object[]} rawVotes - An array of vote objects. Each object must have a `rankings` property that is an array of strings.
  * @param {string[]} options - The official list of all valid options.
+ * @param {function(object, string): void} [onInvalid] - Optional callback invoked as `onInvalid(vote, error)` for each skipped vote.
  * @returns {string[][]} - A clean array of valid ballots, e.g., [['A', 'C'], ...].
  */
-function formatBallots(rawVotes, options) {
+function formatBallots(rawVotes, options, onInvalid) {
   const cleanBallots = [];
   if (!rawVotes || !Array.isArray(rawVotes)) {
     return [];
@@ -96,6 +117,7 @@ function formatBallots(rawVotes, options) {
 
   for (const vote of rawVotes) {
     if (!vote || typeof vote !== "object" || !Array.isArray(vote.rankings)) {
+      if (onInvalid) onInvalid(vote, "Vote is not an object with a rankings array.");
       continue;
     }
 
@@ -104,8 +126,8 @@ function formatBallots(rawVotes, options) {
 
     if (validation.valid) {
       cleanBallots.push(ballot);
-    } else {
-      console.warn(`Invalid ballot skipped: ${validation.error}`);
+    } else if (onInvalid) {
+      onInvalid(vote, validation.error);
     }
   }
 
@@ -113,32 +135,123 @@ function formatBallots(rawVotes, options) {
 }
 
 /**
+ * Draws a random lot order for breaking ties, for use as `config.tieBreakOrder` in `tally()`.
+ *
+ * Call this once when an election is created and store the result with it, so every count and
+ * recount of that election uses the same order. Drawing a new order at tally time would let a
+ * recount of identical ballots produce a different winner.
+ *
+ * @param {string[]} options - The official list of all valid options.
+ * @param {function(number): number} [randomInt] - Returns a uniformly random integer in [0, n).
+ *   Defaults to a cryptographically secure source.
+ * @returns {string[]} - A shuffled copy of `options`; earlier entries lose unresolved ties first.
+ */
+function drawTieBreakOrder(options, randomInt = secureRandomInt) {
+  if (!Array.isArray(options)) {
+    throw new Error("options must be an array.");
+  }
+  const order = [...options];
+  // Fisher-Yates shuffle: every ordering is equally likely.
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
+}
+
+/**
+ * Decides which of the options tied for last place to eliminate.
+ *
+ * 1. If the tied options have no votes, eliminate them all at once. No ballots move, so this is
+ *    identical to eliminating them one at a time. (Batching options that do hold votes is not safe:
+ *    it skips intermediate rounds that a later previous-round tie-break may depend on.)
+ * 2. Otherwise, look back through earlier rounds, most recent first, keeping only the options
+ *    with the fewest votes in each, until one remains.
+ * 3. Otherwise, eliminate whichever remaining option comes first in `tieBreakOrder`.
+ *
+ * @param {string[]} tied - Options tied for the fewest votes this round.
+ * @param {Map<string, number>} roundTally - This round's vote counts for every active option.
+ * @param {object[]} previousRounds - Round logs for the rounds already completed.
+ * @param {string[]} [tieBreakOrder] - Every option, in the order they lose unresolved ties.
+ * @returns {{eliminate: string[], method: string}|{unresolved: string[]}} - The options to eliminate and
+ *   the rule that chose them, or the options still tied if no rule separates them.
+ */
+function resolveTie(tied, roundTally, previousRounds, tieBreakOrder) {
+  if (roundTally.get(tied[0]) === 0) {
+    return { eliminate: tied, method: "batch" };
+  }
+
+  let remaining = tied;
+  for (let i = previousRounds.length - 1; i >= 0 && remaining.length > 1; i--) {
+    const pastTally = previousRounds[i].tally;
+    const fewest = Math.min(...remaining.map((option) => pastTally[option]));
+    remaining = remaining.filter((option) => pastTally[option] === fewest);
+  }
+  if (remaining.length === 1) {
+    return { eliminate: remaining, method: "previous_round" };
+  }
+
+  if (tieBreakOrder) {
+    const loser = tieBreakOrder.find((option) => remaining.includes(option));
+    return { eliminate: [loser], method: "tie_break_order" };
+  }
+
+  return { unresolved: remaining };
+}
+
+/**
  * Runs the full round-by-round RCV simulation.
+ *
+ * Each round, an option wins by holding a majority of the continuing (non-exhausted) ballots.
  *
  * @param {string[][]} ballots - A *clean* array of ballots, as returned by `formatBallots()`.
  * @param {string[]} options - The official list of all valid options.
- * @param {object} config - An object specifying the rules for the election.
- * @param {string} config.tieBreaking - How to handle ties for elimination (e.g., 'eliminate_all').
- * @param {number} config.maxRounds - A safety limit to prevent infinite loops (e.g., 20).
+ * @param {object} [config] - An object specifying the rules for the election.
+ * @param {string[]} [config.tieBreakOrder] - Every option, ordered from first to last to lose a tie that
+ *   earlier rounds cannot separate, as returned by `drawTieBreakOrder()`. Without it, such a tie stops the
+ *   tally with status "Unresolved tie".
+ * @param {number} [config.maxRounds] - A safety limit to prevent infinite loops. Defaults to `options.length`,
+ *   which is always enough since every round either finds a winner or eliminates at least one option.
  * @returns {object} - A detailed, round-by-round results object.
  */
-function tally(ballots, options, config) {
+function tally(ballots, options, config = {}) {
+  const maxRounds = config.maxRounds ?? options.length;
+  const tieBreakOrder = config.tieBreakOrder;
+  if (
+    tieBreakOrder !== undefined &&
+    (!Array.isArray(tieBreakOrder) || !options.every((option) => tieBreakOrder.includes(option)))
+  ) {
+    throw new Error("config.tieBreakOrder must be an array listing every option.");
+  }
+
   const totalVotes = ballots.length;
-  const threshold = Math.floor(totalVotes / 2) + 1;
   const roundLogs = [];
+  let firstRoundThreshold = null;
+
+  const result = (winner, extra = {}) => ({
+    winner: winner,
+    totalVotes: totalVotes,
+    threshold: firstRoundThreshold,
+    options: options,
+    rounds: roundLogs,
+    ...extra,
+  });
 
   let activeOptions = new Set(options);
   let currentBallotChoices = ballots.map((ballot) =>
     getActiveChoice(ballot, activeOptions)
   );
 
-  for (let round = 1; round <= config.maxRounds; round++) {
+  for (let round = 1; round <= maxRounds; round++) {
     const roundTally = new Map();
     const roundLog = {
       round: round,
+      threshold: 0,
+      exhausted: 0,
       tally: {},
       status: "",
       eliminated: [],
+      tieBreak: null,
       transfers: {},
     };
 
@@ -146,11 +259,20 @@ function tally(ballots, options, config) {
       roundTally.set(option, 0);
     }
 
+    let continuingVotes = 0;
     for (const choice of currentBallotChoices) {
       if (choice) {
         roundTally.set(choice, roundTally.get(choice) + 1);
+        continuingVotes++;
       }
     }
+
+    const threshold = Math.floor(continuingVotes / 2) + 1;
+    if (round === 1) {
+      firstRoundThreshold = threshold;
+    }
+    roundLog.threshold = threshold;
+    roundLog.exhausted = totalVotes - continuingVotes;
 
     roundTally.forEach((count, option) => {
       roundLog.tally[option] = count;
@@ -160,41 +282,41 @@ function tally(ballots, options, config) {
       if (count >= threshold) {
         roundLog.status = "Winner found";
         roundLogs.push(roundLog);
-        return {
-          winner: option,
-          totalVotes: totalVotes,
-          threshold: threshold,
-          options: options,
-          rounds: roundLogs,
-        };
+        return result(option);
       }
     }
 
+    if (continuingVotes === 0) {
+      roundLog.status = "No continuing ballots";
+      roundLogs.push(roundLog);
+      return result(null);
+    }
+
     let minVotes = Infinity;
-    for (const [option, count] of roundTally.entries()) {
+    for (const count of roundTally.values()) {
       if (count < minVotes) {
         minVotes = count;
       }
     }
 
-    const toEliminate = [];
+    let toEliminate = [];
     for (const [option, count] of roundTally.entries()) {
       if (count === minVotes) {
         toEliminate.push(option);
       }
     }
 
-    if (toEliminate.length === activeOptions.size) {
-      roundLog.status = "Unbreakable tie";
-      roundLog.eliminated = toEliminate;
-      roundLogs.push(roundLog);
-      return {
-        winner: null,
-        totalVotes: totalVotes,
-        threshold: threshold,
-        options: options,
-        rounds: roundLogs,
-      };
+    if (toEliminate.length > 1) {
+      const resolution = resolveTie(toEliminate, roundTally, roundLogs, tieBreakOrder);
+      if (resolution.unresolved) {
+        roundLog.status = "Unresolved tie";
+        roundLogs.push(roundLog);
+        return result(null, {
+          error: `Tie for last place between ${resolution.unresolved.join(", ")} cannot be broken by earlier rounds. Pass config.tieBreakOrder (see drawTieBreakOrder()) to resolve it.`,
+        });
+      }
+      toEliminate = resolution.eliminate;
+      roundLog.tieBreak = resolution.method;
     }
 
     roundLog.status = "Elimination";
@@ -234,14 +356,7 @@ function tally(ballots, options, config) {
     roundLogs.push(roundLog);
   }
 
-  return {
-    winner: null,
-    totalVotes: totalVotes,
-    threshold: threshold,
-    options: options,
-    rounds: roundLogs,
-    error: `Tally exceeded max rounds (${config.maxRounds}).`,
-  };
+  return result(null, { error: `Tally exceeded max rounds (${maxRounds}).` });
 }
 
 // -----------------------------------------------------------------------------
@@ -251,5 +366,6 @@ function tally(ballots, options, config) {
 module.exports = {
   validateVote,
   formatBallots,
+  drawTieBreakOrder,
   tally,
 };

@@ -1,6 +1,6 @@
 {
   "name": "@destinlmincy/rcv-core-logic",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "description": "A pure, lightweight, and dependency-free JavaScript library for calculating Ranked Choice Voting (RCV) elections.",
   "keywords": [
     "rcv",
@@ -17,7 +17,7 @@
     "type": "git",
     "url": "git+https://github.com/DestinMincy/rcv-core-logic.git"
   },
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "author": "Destin L. Mincy",
   "type": "commonjs",
   "main": "index.js",

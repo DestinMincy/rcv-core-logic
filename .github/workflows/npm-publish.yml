@@ -4,9 +4,25 @@ on:
   push:
     branches:
       - master
+  pull_request:
 
 jobs:
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - name: Setup Node.js
+          uses: actions/setup-node@v4
+          with:
+            node-version: '20'
+
+        - name: Test
+          run: npm test
+
     publish:
+      needs: test
+      if: github.event_name == 'push'
       runs-on: ubuntu-latest
       permissions:
         contents: write
@@ -14,21 +30,12 @@ jobs:
         - uses: actions/checkout@v4
           with:
             fetch-depth: 0
-        
+
         - name: Setup Node.js
           uses: actions/setup-node@v4
           with:
             node-version: '20'
             registry-url: 'https://registry.npmjs.org'
-        
-        - name: Setup pnpm
-          run: npm install -g pnpm
-
-        - name: Install dependencies
-          run: pnpm install
-
-        - name: Test
-          run: pnpm test
 
         - name: Check the version
           id: check
@@ -63,9 +70,3 @@ jobs:
             git config --local user.name "github-actions[bot]"
             git tag -a "v${{ steps.check.outputs.new_version }}" -m "v${{ steps.check.outputs.new_version }}"
             git push origin "v${{ steps.check.outputs.new_version }}"
-
-
-
-
-
-        
