@@ -84,7 +84,7 @@ console.log(validateVote(vote3, candidates));
 
 ```
 
-`formatBallots(rawVotes, candidates)`
+`formatBallots(rawVotes, candidates, onInvalid)`
 Cleans and formats a "messy" array of vote objects (e.g., from a database) into a "clean" array of arrays for the tally function. It uses validateVote() internally to filter out any invalid ballots.
 
 **Arguments:**
@@ -92,6 +92,8 @@ Cleans and formats a "messy" array of vote objects (e.g., from a database) into 
 - `rawVotes` (Array<object>): An array of vote objects. Each object must have a rankings property that is an array of strings.
 
 - `candidates` (Array<string>): The official list of all valid candidates.
+
+- `onInvalid` (function, optional): Called as `onInvalid(vote, error)` for each vote that is skipped. The library never writes to the console, so pass this if you want to log or count rejected ballots.
 
 **Returns:** (Array<Array<string>>): A clean array of only the valid ballots.
 
@@ -109,7 +111,9 @@ const rawVotes = [
   { userId: 'u-101', rankings: ['D'] }             // Invalid (bad candidate)
 ];
 
-const cleanBallots = formatBallots(rawVotes, candidates);
+const cleanBallots = formatBallots(rawVotes, candidates, (vote, error) => {
+  console.warn(`Skipped ${vote.userId}: ${error}`);
+});
 
 console.log(cleanBallots);
 // Output: [ ['A', 'B'], ['C'] ]
@@ -127,13 +131,15 @@ The main engine. This function takes a clean list of ballots and runs the full r
 
 - `config` (object, optional): An object specifying the rules for the election.
 
-  - `tieBreaking` (string): How to handle ties for elimination. (e.g., `'eliminate_all'`).
+  - `tieBreaking` (string): How to handle a tie for last place. Unknown values throw.
+    - `'eliminate_all'` (default): eliminate every tied option at once. Simple, but it can eliminate an option that would have won once the others' votes transferred.
+    - `'previous_round'`: eliminate whichever tied option had the fewest votes in the most recent earlier round that separates them. If no earlier round does (e.g. a tie in round 1), all tied options are eliminated.
 
   - `maxRounds` (number): A safety limit to prevent infinite loops (e.g., `20`). Defaults to the number of candidates.
 
 **Returns:** (object): A detailed, round-by-round results object.
 
-- The winning threshold is a majority of all ballots cast (`floor(totalVotes / 2) + 1`). If exhausted ballots keep every option below it, elimination continues until one option remains, and that option wins.
+- Each round, an option wins with a majority of the *continuing* ballots, i.e. those not yet exhausted (`floor(continuing / 2) + 1`). Each round reports its own `threshold` and `exhausted` count; the top-level `threshold` is the first round's.
 - `rounds[n].transfers` maps each eliminated option to where its ballots went, e.g. `{ "C": { "B": 1, "exhausted": 2 } }`.
 
 **Example:**
@@ -175,6 +181,8 @@ console.log(JSON.stringify(results, null, 2));
   "rounds": [
     {
       "round": 1,
+      "threshold": 3,
+      "exhausted": 0,
       "tally": {
         "A": 2,
         "B": 2,
@@ -190,6 +198,8 @@ console.log(JSON.stringify(results, null, 2));
     },
     {
       "round": 2,
+      "threshold": 3,
+      "exhausted": 0,
       "tally": {
         "A": 2,
         "B": 3

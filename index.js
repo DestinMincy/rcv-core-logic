@@ -86,9 +86,10 @@ function validateVote(ballot, options) {
  *
  * @param {object[]} rawVotes - An array of vote objects. Each object must have a `rankings` property that is an array of strings.
  * @param {string[]} options - The official list of all valid options.
+ * @param {function(object, string): void} [onInvalid] - Optional callback invoked as `onInvalid(vote, error)` for each skipped vote.
  * @returns {string[][]} - A clean array of valid ballots, e.g., [['A', 'C'], ...].
  */
-function formatBallots(rawVotes, options) {
+function formatBallots(rawVotes, options, onInvalid) {
   const cleanBallots = [];
   if (!rawVotes || !Array.isArray(rawVotes)) {
     return [];
@@ -96,6 +97,7 @@ function formatBallots(rawVotes, options) {
 
   for (const vote of rawVotes) {
     if (!vote || typeof vote !== "object" || !Array.isArray(vote.rankings)) {
+      if (onInvalid) onInvalid(vote, "Vote is not an object with a rankings array.");
       continue;
     }
 
@@ -104,30 +106,69 @@ function formatBallots(rawVotes, options) {
 
     if (validation.valid) {
       cleanBallots.push(ballot);
-    } else {
-      console.warn(`Invalid ballot skipped: ${validation.error}`);
+    } else if (onInvalid) {
+      onInvalid(vote, validation.error);
     }
   }
 
   return cleanBallots;
 }
 
+const TIE_BREAKING_RULES = ["eliminate_all", "previous_round"];
+
+/**
+ * Narrows a set of options tied for last place by looking back through earlier rounds,
+ * most recent first, and keeping only those with the fewest votes in each.
+ * @param {string[]} tied - Options tied for the fewest votes this round.
+ * @param {object[]} previousRounds - Round logs for the rounds already completed.
+ * @returns {string[]} - The options to eliminate; more than one if the tie never breaks.
+ */
+function breakTieByPreviousRounds(tied, previousRounds) {
+  let remaining = tied;
+  for (let i = previousRounds.length - 1; i >= 0 && remaining.length > 1; i--) {
+    const pastTally = previousRounds[i].tally;
+    const fewest = Math.min(...remaining.map((option) => pastTally[option]));
+    remaining = remaining.filter((option) => pastTally[option] === fewest);
+  }
+  return remaining;
+}
+
 /**
  * Runs the full round-by-round RCV simulation.
+ *
+ * Each round, an option wins by holding a majority of the continuing (non-exhausted) ballots.
  *
  * @param {string[][]} ballots - A *clean* array of ballots, as returned by `formatBallots()`.
  * @param {string[]} options - The official list of all valid options.
  * @param {object} [config] - An object specifying the rules for the election.
- * @param {string} [config.tieBreaking] - How to handle ties for elimination (e.g., 'eliminate_all').
+ * @param {string} [config.tieBreaking] - How to handle ties for last place. `'eliminate_all'` (default) eliminates
+ *   every tied option at once. `'previous_round'` eliminates whichever tied option had the fewest votes in the most
+ *   recent earlier round that separates them, and falls back to eliminating all of them if none does.
  * @param {number} [config.maxRounds] - A safety limit to prevent infinite loops. Defaults to `options.length`,
  *   which is always enough since every round either finds a winner or eliminates at least one option.
  * @returns {object} - A detailed, round-by-round results object.
  */
 function tally(ballots, options, config = {}) {
   const maxRounds = config.maxRounds ?? options.length;
+  const tieBreaking = config.tieBreaking ?? "eliminate_all";
+  if (!TIE_BREAKING_RULES.includes(tieBreaking)) {
+    throw new Error(
+      `Unknown tieBreaking rule "${tieBreaking}". Expected one of: ${TIE_BREAKING_RULES.join(", ")}.`
+    );
+  }
+
   const totalVotes = ballots.length;
-  const threshold = Math.floor(totalVotes / 2) + 1;
   const roundLogs = [];
+  let firstRoundThreshold = null;
+
+  const result = (winner, extra = {}) => ({
+    winner: winner,
+    totalVotes: totalVotes,
+    threshold: firstRoundThreshold,
+    options: options,
+    rounds: roundLogs,
+    ...extra,
+  });
 
   let activeOptions = new Set(options);
   let currentBallotChoices = ballots.map((ballot) =>
@@ -138,6 +179,8 @@ function tally(ballots, options, config = {}) {
     const roundTally = new Map();
     const roundLog = {
       round: round,
+      threshold: 0,
+      exhausted: 0,
       tally: {},
       status: "",
       eliminated: [],
@@ -148,58 +191,56 @@ function tally(ballots, options, config = {}) {
       roundTally.set(option, 0);
     }
 
+    let continuingVotes = 0;
     for (const choice of currentBallotChoices) {
       if (choice) {
         roundTally.set(choice, roundTally.get(choice) + 1);
+        continuingVotes++;
       }
     }
+
+    const threshold = Math.floor(continuingVotes / 2) + 1;
+    if (round === 1) {
+      firstRoundThreshold = threshold;
+    }
+    roundLog.threshold = threshold;
+    roundLog.exhausted = totalVotes - continuingVotes;
 
     roundTally.forEach((count, option) => {
       roundLog.tally[option] = count;
     });
 
-    // A lone remaining option wins even if exhausted ballots keep it below the
-    // original threshold; otherwise it would be "eliminated" as a tie with itself.
-    const soleSurvivor = activeOptions.size === 1;
     for (const [option, count] of roundTally.entries()) {
-      if (count >= threshold || (soleSurvivor && count > 0)) {
+      if (count >= threshold) {
         roundLog.status = "Winner found";
         roundLogs.push(roundLog);
-        return {
-          winner: option,
-          totalVotes: totalVotes,
-          threshold: threshold,
-          options: options,
-          rounds: roundLogs,
-        };
+        return result(option);
       }
     }
 
     let minVotes = Infinity;
-    for (const [option, count] of roundTally.entries()) {
+    for (const count of roundTally.values()) {
       if (count < minVotes) {
         minVotes = count;
       }
     }
 
-    const toEliminate = [];
+    let toEliminate = [];
     for (const [option, count] of roundTally.entries()) {
       if (count === minVotes) {
         toEliminate.push(option);
       }
     }
 
+    if (toEliminate.length > 1 && tieBreaking === "previous_round") {
+      toEliminate = breakTieByPreviousRounds(toEliminate, roundLogs);
+    }
+
     if (toEliminate.length === activeOptions.size) {
       roundLog.status = "Unbreakable tie";
       roundLog.eliminated = toEliminate;
       roundLogs.push(roundLog);
-      return {
-        winner: null,
-        totalVotes: totalVotes,
-        threshold: threshold,
-        options: options,
-        rounds: roundLogs,
-      };
+      return result(null);
     }
 
     roundLog.status = "Elimination";
@@ -239,14 +280,7 @@ function tally(ballots, options, config = {}) {
     roundLogs.push(roundLog);
   }
 
-  return {
-    winner: null,
-    totalVotes: totalVotes,
-    threshold: threshold,
-    options: options,
-    rounds: roundLogs,
-    error: `Tally exceeded max rounds (${maxRounds}).`,
-  };
+  return result(null, { error: `Tally exceeded max rounds (${maxRounds}).` });
 }
 
 // -----------------------------------------------------------------------------

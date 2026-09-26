@@ -114,8 +114,33 @@ test('should filter out invalid and malformed ballots', () => {
     ['C'],
     ['A', 'C'],
   ];
-  const result = formatBallots(rawVotes, TEST_CANDIDATES);
+  const skipped = [];
+  const result = formatBallots(rawVotes, TEST_CANDIDATES, (vote, error) =>
+    skipped.push([vote && vote.userId, error])
+  );
   assertEqual(result, expected, 'Ballot formatting failed');
+  assertEqual(
+    skipped,
+    [
+      ['u-2', 'Duplicate found: ballot contains repeated option rankings.'],
+      ['u-4', 'Invalid choice: "D" is not one of the options.'],
+      ['u-6', 'Vote is not an object with a rankings array.'],
+      [null, 'Vote is not an object with a rankings array.'],
+    ],
+    'onInvalid was not called for each skipped vote'
+  );
+});
+
+test('should not write to the console when skipping ballots', () => {
+  const originalWarn = console.warn;
+  let warned = false;
+  console.warn = () => { warned = true; };
+  try {
+    formatBallots([{ rankings: ['D'] }], TEST_CANDIDATES);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assertEqual(warned, false, 'formatBallots wrote to console.warn');
 });
 
 test('should return an empty array for empty input', () => {
@@ -263,6 +288,71 @@ test('should default maxRounds when config is omitted', () => {
   const results = tally(ballots, ['A', 'B', 'C']);
   assertEqual(results.winner, 'B', 'Default config winner incorrect');
   assertEqual(results.error, undefined, 'Default config should not hit max rounds');
+});
+
+test('should measure the threshold against continuing ballots each round', () => {
+  const ballots = [
+    ['A'], ['A'], ['A'], ['A'],
+    ['B'], ['B'], ['B'],
+    ['C'], ['C'],
+    ['D'],
+  ];
+  const results = tally(ballots, ['A', 'B', 'C', 'D'], TEST_CONFIG);
+
+  // Round 1: 10 continuing, threshold 6. D eliminated, its ballot exhausts.
+  // Round 2: 9 continuing, threshold 5. C eliminated, its ballots exhaust.
+  // Round 3: 7 continuing, threshold 4. A has 4 and wins.
+  assertEqual(results.winner, 'A', 'Continuing-ballot winner incorrect');
+  assertEqual(results.threshold, 6, 'Top-level threshold should be the first-round threshold');
+  assertEqual(results.rounds.length, 3, 'Continuing-ballot round count incorrect');
+  assertEqual(
+    results.rounds.map((r) => [r.threshold, r.exhausted]),
+    [[6, 0], [5, 1], [4, 3]],
+    'Per-round threshold/exhausted incorrect'
+  );
+});
+
+test('should break a last-place tie using the previous round when configured', () => {
+  const ballots = [
+    ['A'], ['A'], ['A'],
+    ['B', 'A'], ['B', 'C'],
+    ['C'], ['C'], ['C'],
+    ['D', 'B', 'A'],
+  ];
+  const candidates = ['A', 'B', 'C', 'D'];
+
+  // Round 1: {A: 3, B: 2, C: 3, D: 1}. D eliminated, transfers to B.
+  // Round 2: {A: 3, B: 3, C: 3}, a three-way tie.
+  const eliminateAll = tally(ballots, candidates, TEST_CONFIG);
+  assertEqual(eliminateAll.winner, null, 'eliminate_all should end in a tie');
+  assertEqual(eliminateAll.rounds[1].status, 'Unbreakable tie', 'eliminate_all status incorrect');
+
+  // previous_round: B had the fewest in round 1, so only B is eliminated.
+  // Round 3: {A: 5, C: 4}. A wins.
+  const previousRound = tally(ballots, candidates, { tieBreaking: 'previous_round' });
+  assertEqual(previousRound.rounds[1].eliminated, ['B'], 'previous_round eliminated the wrong option');
+  assertEqual(previousRound.winner, 'A', 'previous_round winner incorrect');
+  assertEqual(previousRound.rounds[2].tally, { A: 5, C: 4 }, 'previous_round final tally incorrect');
+});
+
+test('should eliminate all tied options when no previous round separates them', () => {
+  const ballots = [['A'], ['A'], ['A'], ['B'], ['C'], ['D']];
+  const results = tally(ballots, ['A', 'B', 'C', 'D'], { tieBreaking: 'previous_round' });
+  // Round 1: {A: 3, B: 1, C: 1, D: 1}, threshold 4. No earlier round exists,
+  // so B, C and D are eliminated together and their ballots exhaust.
+  // Round 2: A has 3 of 3 continuing ballots and wins.
+  assertEqual(results.rounds[0].eliminated, ['B', 'C', 'D'], 'Round-1 tie fallback incorrect');
+  assertEqual(results.winner, 'A', 'Round-1 tie fallback winner incorrect');
+});
+
+test('should reject an unknown tieBreaking rule', () => {
+  let threw = false;
+  try {
+    tally([['A']], ['A', 'B'], { tieBreaking: 'coin_flip' });
+  } catch (error) {
+    threw = /Unknown tieBreaking rule "coin_flip"/.test(error.message);
+  }
+  assertEqual(threw, true, 'Unknown tieBreaking rule did not throw');
 });
 
 // ---------------------------------
