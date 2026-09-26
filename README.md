@@ -261,4 +261,4 @@ npm test
 ---
 
 ## Copyright
-Copyright (c) 2025 Destin L. Mincy. All Rights Reserved.
+Copyright (c) 2025 Destin L Mincy. All Rights Reserved.
