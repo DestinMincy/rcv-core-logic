@@ -35,6 +35,26 @@ function getTransferChoice(ballot, activeOptions) {
   return getActiveChoice(ballot, activeOptions);
 }
 
+/**
+ * Returns a uniformly random integer in [0, n) from a cryptographically secure source.
+ * Uses rejection sampling so no value is favored when 2^32 is not a multiple of n.
+ * @param {number} n - Exclusive upper bound, 1 <= n <= 2^32.
+ * @returns {number}
+ */
+function secureRandomInt(n) {
+  const cryptoSource =
+    globalThis.crypto ?? (typeof require === "function" ? require("crypto").webcrypto : undefined);
+  if (!cryptoSource || typeof cryptoSource.getRandomValues !== "function") {
+    throw new Error("No secure random source available; pass a randomInt function to drawTieBreakOrder().");
+  }
+  const limit = 2 ** 32 - (2 ** 32 % n);
+  const buffer = new Uint32Array(1);
+  do {
+    cryptoSource.getRandomValues(buffer);
+  } while (buffer[0] >= limit);
+  return buffer[0] % n;
+}
+
 // -----------------------------------------------------------------------------
 // Exported Functions
 // -----------------------------------------------------------------------------
@@ -115,6 +135,31 @@ function formatBallots(rawVotes, options, onInvalid) {
 }
 
 /**
+ * Draws a random lot order for breaking ties, for use as `config.tieBreakOrder` in `tally()`.
+ *
+ * Call this once when an election is created and store the result with it, so every count and
+ * recount of that election uses the same order. Drawing a new order at tally time would let a
+ * recount of identical ballots produce a different winner.
+ *
+ * @param {string[]} options - The official list of all valid options.
+ * @param {function(number): number} [randomInt] - Returns a uniformly random integer in [0, n).
+ *   Defaults to a cryptographically secure source.
+ * @returns {string[]} - A shuffled copy of `options`; earlier entries lose unresolved ties first.
+ */
+function drawTieBreakOrder(options, randomInt = secureRandomInt) {
+  if (!Array.isArray(options)) {
+    throw new Error("options must be an array.");
+  }
+  const order = [...options];
+  // Fisher-Yates shuffle: every ordering is equally likely.
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
+}
+
+/**
  * Decides which of the options tied for last place to eliminate.
  *
  * 1. If the tied options have no votes, eliminate them all at once. No ballots move, so this is
@@ -163,8 +208,8 @@ function resolveTie(tied, roundTally, previousRounds, tieBreakOrder) {
  * @param {string[]} options - The official list of all valid options.
  * @param {object} [config] - An object specifying the rules for the election.
  * @param {string[]} [config.tieBreakOrder] - Every option, ordered from first to last to lose a tie that
- *   earlier rounds cannot separate (e.g. the result of drawing lots in advance). Without it, such a tie stops
- *   the tally with status "Unresolved tie".
+ *   earlier rounds cannot separate, as returned by `drawTieBreakOrder()`. Without it, such a tie stops the
+ *   tally with status "Unresolved tie".
  * @param {number} [config.maxRounds] - A safety limit to prevent infinite loops. Defaults to `options.length`,
  *   which is always enough since every round either finds a winner or eliminates at least one option.
  * @returns {object} - A detailed, round-by-round results object.
@@ -267,7 +312,7 @@ function tally(ballots, options, config = {}) {
         roundLog.status = "Unresolved tie";
         roundLogs.push(roundLog);
         return result(null, {
-          error: `Tie for last place between ${resolution.unresolved.join(", ")} cannot be broken by earlier rounds. Pass config.tieBreakOrder to resolve it.`,
+          error: `Tie for last place between ${resolution.unresolved.join(", ")} cannot be broken by earlier rounds. Pass config.tieBreakOrder (see drawTieBreakOrder()) to resolve it.`,
         });
       }
       toEliminate = resolution.eliminate;
@@ -321,5 +366,6 @@ function tally(ballots, options, config = {}) {
 module.exports = {
   validateVote,
   formatBallots,
+  drawTieBreakOrder,
   tally,
 };

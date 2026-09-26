@@ -8,7 +8,7 @@
 
 // Import the functions to be tested
 // The './' is important – it tells Node to look for a local file.
-const { validateVote, formatBallots, tally } = require('./index.js');
+const { validateVote, formatBallots, drawTieBreakOrder, tally } = require('./index.js');
 
 // A simple test runner helper
 let testCount = 0;
@@ -355,7 +355,7 @@ test('should not batch-eliminate tied options that hold votes', () => {
   assertEqual(results.rounds[0].eliminated, [], 'Unresolved tie should eliminate nothing');
   assertEqual(
     results.error,
-    'Tie for last place between C, D cannot be broken by earlier rounds. Pass config.tieBreakOrder to resolve it.',
+    'Tie for last place between C, D cannot be broken by earlier rounds. Pass config.tieBreakOrder (see drawTieBreakOrder()) to resolve it.',
     'Unresolved tie error incorrect'
   );
 });
@@ -375,6 +375,45 @@ test('should reject a tieBreakOrder that does not list every option', () => {
     message = error.message;
   }
   assertEqual(message, 'config.tieBreakOrder must be an array listing every option.', 'Incomplete tieBreakOrder did not throw');
+});
+
+// ---------------------------------
+// 4. drawTieBreakOrder() Tests
+// ---------------------------------
+console.log('\nRunning tests for drawTieBreakOrder()...');
+
+test('should return a shuffled copy containing every option once', () => {
+  const options = ['A', 'B', 'C', 'D', 'E'];
+  const order = drawTieBreakOrder(options);
+  assertEqual([...order].sort(), options, 'Draw is not a permutation of the options');
+  assertEqual(options, ['A', 'B', 'C', 'D', 'E'], 'Draw mutated the input');
+});
+
+test('should use an injected random source deterministically', () => {
+  // Always picking index 0 moves each element to the front in turn: a rotation.
+  assertEqual(drawTieBreakOrder(['A', 'B', 'C', 'D'], () => 0), ['B', 'C', 'D', 'A'], 'Injected source not used');
+});
+
+test('should draw every ordering with equal probability', () => {
+  // 6 orderings of 3 options, 6000 draws: expect ~1000 each (sd ~29). A 200 margin is ~7 sd.
+  const counts = {};
+  for (let i = 0; i < 6000; i++) {
+    const key = drawTieBreakOrder(['A', 'B', 'C']).join('');
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  assertEqual(Object.keys(counts).length, 6, 'Not every ordering was drawn');
+  for (const [order, count] of Object.entries(counts)) {
+    if (Math.abs(count - 1000) > 200) {
+      throw new Error(`Ordering ${order} drawn ${count} times, expected about 1000`);
+    }
+  }
+});
+
+test('should produce an order tally() accepts, resolving ties earlier rounds cannot', () => {
+  const options = ['A', 'B'];
+  const results = tally([['A', 'B'], ['B', 'A']], options, { tieBreakOrder: drawTieBreakOrder(options) });
+  assertEqual(results.rounds[0].tieBreak, 'tie_break_order', 'Drawn order was not used');
+  assertEqual(results.winner !== null, true, 'Drawn order did not resolve the tie');
 });
 
 // ---------------------------------
